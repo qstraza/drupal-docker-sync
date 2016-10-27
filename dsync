@@ -44,18 +44,21 @@ function db_sync {
 function files_sync_rsync {
   # Using rsync
   rsync -avz --delete $SSH_DEV_ALIAS:$REMOTE_DRUPAL_PATH/sites/$DRUPAL_SITE_NAME/files $LOCAL_DRUPAL_SITE
+  fix_permission
 }
 
 function files_sync_scp {
   # Using scp
   rm -rf $LOCAL_DRUPAL_SITE/files
   scp -r $SSH_DEV_ALIAS:$REMOTE_DRUPAL_PATH/sites/$DRUPAL_SITE_NAME/files $LOCAL_DRUPAL_SITE
+  fix_permission
 }
 
 function files_sync_tar {
   # Using tar
   rm -rf $LOCAL_DRUPAL_SITE/files
   ssh addev "cd $REMOTE_DRUPAL_PATH/sites/$DRUPAL_SITE_NAME/ && tar -zcvO files" | tar -zxvf - -C $LOCAL_DRUPAL_SITE
+  fix_permission
 }
 
 function fix_permission {
