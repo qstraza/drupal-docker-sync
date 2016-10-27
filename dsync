@@ -1,0 +1,113 @@
+#!/bin/bash
+
+SSH_DEV_ALIAS='addev'
+DOCKER_DRUSH='docker-compose exec php drush'
+REMOTE_DRUPAL_PATH=$(grep D_REMOTE_DRUPAL_PATH docker-compose.yml | cut -d : -f 2 | cut -d " " -f 2)
+REMOTE_IS_DOCKER=$(grep D_REMOTE_IS_DOCKER docker-compose.yml | cut -d : -f 2 | cut -d " " -f 2)
+#tr -d '[[:space:]]'
+DRUPAL_SITE_NAME='default'
+DRUPAL_VERSION=$(grep DRUPAL_VERSION docker-compose.yml | cut -d : -f 2 | cut -d " " -f 2)
+LOCAL_DRUPAL_SITE='docroot/sites/default/'
+DB_DUMP_PATH='docker-runtime/mariadb-init'
+DB_PATH='docker-runtime/mariadb'
+
+function db_sync {
+  if [ -d "$DB_DUMP_PATH" ]; then
+    rm -rf $DB_DUMP_PATH/*
+  else
+    mkdir -p "$DB_DUMP_PATH"
+  fi
+
+  if [ $REMOTE_IS_DOCKER -eq 0 ]; then
+    ssh $SSH_DEV_ALIAS "cd $REMOTE_DRUPAL_PATH && drush sql-dump --gzip" | gunzip > $DB_DUMP_PATH/sqldump.sql
+  else
+    echo "TBD"
+  fi
+
+  # Check if connection was successful.
+  if [ $? -eq 1 ]; then
+    exit
+  fi
+
+  rm -rf $DB_PATH
+
+  # Prepend 'sudo' if we are running on Linux.
+  if [ "$(expr substr $(uname -s) 1 5)" == "Linux" ]; then
+    sudo docker-compose kill
+    sudo docker-compose up -d
+  else
+    docker-compose kill
+    docker-compose up -d
+  fi
+}
+
+function files_sync_rsync {
+  # Using rsync
+  rsync -avz --delete $SSH_DEV_ALIAS:$REMOTE_DRUPAL_PATH/sites/$DRUPAL_SITE_NAME/files $LOCAL_DRUPAL_SITE
+}
+
+function files_sync_scp {
+  # Using scp
+  rm -rf $LOCAL_DRUPAL_SITE/files
+  scp -r $SSH_DEV_ALIAS:$REMOTE_DRUPAL_PATH/sites/$DRUPAL_SITE_NAME/files $LOCAL_DRUPAL_SITE
+}
+
+function files_sync_tar {
+  # Using tar
+  rm -rf $LOCAL_DRUPAL_SITE/files
+  ssh addev "cd $REMOTE_DRUPAL_PATH/sites/$DRUPAL_SITE_NAME/ && tar -zcvO files" | tar -zxvf - -C $LOCAL_DRUPAL_SITE
+}
+
+while getopts ":spla:" opt; do
+  case "$opt" in
+    s)
+      DRUPAL_SITE_NAME=$OPTARG
+      ;;
+    p)
+      REMOTE_DRUPAL_PATH=$OPTARG
+      ;;
+    l)
+      LOCAL_DRUPAL_SITE=$OPTARG
+      ;;
+    a)
+      SSH_DEV_ALIAS=$OPTARG
+      ;;
+    \?)
+      echo "Invalid option: -$OPTARG" >&2
+      echo "usage: $0 [-s | -p | -l | -a] db-sync | rsync | scp | tar"
+      echo "Options:"
+      echo -e "\t-s \tName of drupal site on remote server. By default it is set to $DRUPAL_SITE_NAME"
+      echo -e "\t-p \tSet path to drupal files on remote server. This is by default parsed from docker-compose.yml file"
+      echo -e "\t-l \tSet path to drupal files on your localhost system. This is by default set to $LOCAL_DRUPAL_SITE"
+      echo -e "\t-a \tSet SSH alias for accessing remote server. Defaults to $SSH_DEV_ALIAS"
+      echo ""
+      echo -e "\tdb-sync \tSynchronizes database from remote server to your local Docker environment"
+      echo -e "\trsync \t\tSynchronizes files (folder sites/$DRUPAL_SITE_NAME/files) from remote server to your local Docker environment. It uses rsync. Recommended way."
+      echo -e "\tscp \t\tSynchronizes files (folder sites/$DRUPAL_SITE_NAME/files) from remote server to your local Docker environment. It uses scp to copy files over."
+      echo -e "\ttar \t\tSynchronizes files (folder sites/$DRUPAL_SITE_NAME/files) from remote server to your local Docker environment. It uses tar to copy files over."
+      exit 1
+      ;;
+    :)
+      echo "Option -$OPTARG requires an argument." >&2
+      exit 1
+      ;;
+  esac
+done
+
+for arg in "$@"
+do
+  case $arg in
+  'db-sync')
+    db_sync
+    ;;
+  'rsync')
+    files_sync_rsync
+    ;;
+  'scp')
+    files_sync_scp
+    ;;
+  'tar')
+    files_sync_tar
+    ;;
+  esac
+done
