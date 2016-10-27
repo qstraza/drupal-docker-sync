@@ -58,6 +58,13 @@ function files_sync_tar {
   ssh addev "cd $REMOTE_DRUPAL_PATH/sites/$DRUPAL_SITE_NAME/ && tar -zcvO files" | tar -zxvf - -C $LOCAL_DRUPAL_SITE
 }
 
+function fix_permission {
+  if [ "$(expr substr $(uname -s) 1 5)" == "Linux" ]; then
+    sudo chgrp -R 82 $LOCAL_DRUPAL_SITE/files
+    sudo chmod -R 775 $LOCAL_DRUPAL_SITE/files
+  fi
+}
+
 while getopts ":spla:" opt; do
   case "$opt" in
     s)
