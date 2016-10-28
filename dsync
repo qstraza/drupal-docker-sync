@@ -10,6 +10,7 @@ DRUPAL_VERSION=$(grep DRUPAL_VERSION docker-compose.yml | cut -d : -f 2 | cut -d
 LOCAL_DRUPAL_SITE='docroot/sites/default/'
 DB_DUMP_PATH='docker-runtime/mariadb-init'
 DB_PATH='docker-runtime/mariadb'
+DOCKER_GROUP_NAME='docker'
 
 function db_sync {
   if [ -d "$DB_DUMP_PATH" ]; then
@@ -29,10 +30,17 @@ function db_sync {
     exit
   fi
 
-  rm -rf $DB_PATH
-
-  # Prepend 'sudo' if we are running on Linux.
+  # If we are on Linux, we cannot remove docker-runtime/mariadb folder (ownership issue),
+  # so we remove this folder within container.
   if [ "$(expr substr $(uname -s) 1 5)" == "Linux" ]; then
+    #sudo rm -rf $DB_PATH
+    docker-compose run db rm -rf /var/lib/mysql
+  else
+    rm -rf $DB_PATH
+  fi
+
+  # Prepend 'sudo' if we are running on Linux and current user is not part of docker group.
+  if [ "$(expr substr $(uname -s) 1 5)" == "Linux" ] && [ ! "$(id -Gn | grep $DOCKER_GROUP_NAME)" ]; then
     sudo docker-compose kill
     sudo docker-compose up -d
   else
@@ -62,9 +70,17 @@ function files_sync_tar {
 }
 
 function fix_permission {
+  # We need to fix permissions to files if we are on Linux.
+  # We also need to change the approach of changing the ownership if
+  # current user is not part of docker group.
   if [ "$(expr substr $(uname -s) 1 5)" == "Linux" ]; then
-    sudo chgrp -R 82 $LOCAL_DRUPAL_SITE/files
-    sudo chmod -R 775 $LOCAL_DRUPAL_SITE/files
+    if [ ! "$(id -Gn | grep $DOCKER_GROUP_NAME)" ]; then
+      sudo chgrp -R 82 $LOCAL_DRUPAL_SITE/files
+      sudo chmod -R 775 $LOCAL_DRUPAL_SITE/files
+    else
+      docker-compose run php chgrp -R 82 sites/$DRUPAL_SITE_NAME/files
+      docker-compose run php chmod -R 775 sites/$DRUPAL_SITE_NAME/files
+    fi
   fi
 }
 
