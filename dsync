@@ -34,7 +34,7 @@ function db_sync {
   # so we remove this folder within container.
   if [ "$(expr substr $(uname -s) 1 5)" == "Linux" ]; then
     #sudo rm -rf $DB_PATH
-    docker-compose run db rm -rf /var/lib/mysql
+    docker-compose run --rm db rm -rf /var/lib/mysql
   else
     rm -rf $DB_PATH
   fi
@@ -78,8 +78,8 @@ function fix_permission {
       sudo chgrp -R 82 $LOCAL_DRUPAL_SITE/files
       sudo chmod -R 775 $LOCAL_DRUPAL_SITE/files
     else
-      docker-compose run php chgrp -R 82 sites/$DRUPAL_SITE_NAME/files
-      docker-compose run php chmod -R 775 sites/$DRUPAL_SITE_NAME/files
+      docker-compose run --rm php chgrp -R 82 sites/$DRUPAL_SITE_NAME/files
+      docker-compose run --rm php chmod -R 775 sites/$DRUPAL_SITE_NAME/files
     fi
   fi
 }
