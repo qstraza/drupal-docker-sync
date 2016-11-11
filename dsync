@@ -1,16 +1,24 @@
 #!/bin/bash
 
 SSH_DEV_ALIAS='addev'
-DOCKER_DRUSH='docker-compose exec php drush'
-REMOTE_DRUPAL_PATH=$(grep D_REMOTE_DRUPAL_PATH docker-compose.yml | cut -d : -f 2 | cut -d " " -f 2)
-REMOTE_IS_DOCKER=$(grep D_REMOTE_IS_DOCKER docker-compose.yml | cut -d : -f 2 | cut -d " " -f 2)
-#tr -d '[[:space:]]'
+DOCKER_DRUSH='sudo docker-compose exec -T --user 82 php drush'
 DRUPAL_SITE_NAME='default'
-DRUPAL_VERSION=$(grep DRUPAL_VERSION docker-compose.yml | cut -d : -f 2 | cut -d " " -f 2)
 LOCAL_DRUPAL_SITE='docroot/sites/default/'
 DB_DUMP_PATH='docker-runtime/mariadb-init'
 DB_PATH='docker-runtime/mariadb'
 DOCKER_GROUP_NAME='docker'
+DOCKER_COMPOSE_FILE_NAME='docker-compose.yml'
+DOCKER_DB_CONTAINER='db'
+
+if [ ! -f "$DOCKER_COMPOSE_FILE_NAME" ]; then
+  echo "Where is your $DOCKER_COMPOSE_FILE_NAME file?"
+  exit 1
+fi
+
+# Parsed variables from yaml file.
+REMOTE_DRUPAL_PATH=$(grep REMOTE_DRUPAL_PATH docker-compose.yml | cut -d : -f 2 | cut -d " " -f 2)
+REMOTE_IS_DOCKER=$(grep REMOTE_IS_DOCKER docker-compose.yml | cut -d : -f 2 | cut -d " " -f 2)
+DRUPAL_VERSION=$(grep DRUPAL_VERSION docker-compose.yml | cut -d : -f 2 | cut -d " " -f 2)
 
 function db_sync {
   if [ -d "$DB_DUMP_PATH" ]; then
@@ -22,7 +30,7 @@ function db_sync {
   if [ $REMOTE_IS_DOCKER -eq 0 ]; then
     ssh $SSH_DEV_ALIAS "cd $REMOTE_DRUPAL_PATH && drush sql-dump --gzip" | gunzip > $DB_DUMP_PATH/sqldump.sql
   else
-    echo "TBD"
+    ssh $SSH_DEV_ALIAS "cd /projects/$REMOTE_DRUPAL_PATH && $DOCKER_DRUSH sql-dump --gzip" | gunzip > $DB_DUMP_PATH/sqldump.sql
   fi
 
   # Check if connection was successful.
@@ -30,28 +38,43 @@ function db_sync {
     exit
   fi
 
-  # If we are on Linux, we cannot remove docker-runtime/mariadb folder (ownership issue),
+  # If we are on Linux, non-root cannot remove docker-runtime/mariadb folder (ownership issue),
   # so we remove this folder within container.
-  if [ "$(expr substr $(uname -s) 1 5)" == "Linux" ]; then
-    #sudo rm -rf $DB_PATH
-    docker-compose run --rm db rm -rf /var/lib/mysql
+  if [ os_check == "linux" ]; then
+    # Prepend 'sudo' if we are running on Linux and current user is not part of docker group.
+    if [ ! "$(id -Gn | grep $DOCKER_GROUP_NAME)" ]; then
+      sudo docker-compose kill $DOCKER_DB_CONTAINER
+      sudo docker-compose rm -f $DOCKER_DB_CONTAINER
+      sudo rm -rf $DB_PATH
+      sudo docker-compose up -d $DOCKER_DB_CONTAINER
+    else
+      docker-compose kill $DOCKER_DB_CONTAINER
+      docker-compose rm -f $DOCKER_DB_CONTAINER
+      docker-compose up -d $DOCKER_DB_CONTAINER
+      docker-compose run --rm $DOCKER_DB_CONTAINER rm -rf /var/lib/mysql
+    fi
   else
+    docker-compose kill $DOCKER_DB_CONTAINER
+    docker-compose rm -f $DOCKER_DB_CONTAINER
     rm -rf $DB_PATH
+    docker-compose up -d $DOCKER_DB_CONTAINER
   fi
 
-  # Prepend 'sudo' if we are running on Linux and current user is not part of docker group.
-  if [ "$(expr substr $(uname -s) 1 5)" == "Linux" ] && [ ! "$(id -Gn | grep $DOCKER_GROUP_NAME)" ]; then
-    sudo docker-compose kill
-    sudo docker-compose up -d
-  else
-    docker-compose kill
-    docker-compose up -d
-  fi
+  echo ""
+  echo "####################################################################################################"
+  echo "# Database has been transferred and is now importing. It may take a while for page to start working."
+  echo "# You may watch logs of DB container by executing:"
+  echo -e "# \tdocker-compose logs -f $DOCKER_DB_CONTAINER"
+  echo "####################################################################################################"
 }
 
 function files_sync_rsync {
   # Using rsync
-  rsync -avz --delete $SSH_DEV_ALIAS:$REMOTE_DRUPAL_PATH/sites/$DRUPAL_SITE_NAME/files $LOCAL_DRUPAL_SITE
+  if [ $REMOTE_IS_DOCKER -eq 0 ]; then
+    rsync -avz --delete $SSH_DEV_ALIAS:$REMOTE_DRUPAL_PATH/sites/$DRUPAL_SITE_NAME/files $LOCAL_DRUPAL_SITE
+  else
+    rsync -avz --delete $SSH_DEV_ALIAS:/projects/$REMOTE_DRUPAL_PATH/docroot/sites/$DRUPAL_SITE_NAME/files $LOCAL_DRUPAL_SITE
+  fi
   fix_permission
 }
 
@@ -73,7 +96,7 @@ function fix_permission {
   # We need to fix permissions to files if we are on Linux.
   # We also need to change the approach of changing the ownership if
   # current user is not part of docker group.
-  if [ "$(expr substr $(uname -s) 1 5)" == "Linux" ]; then
+  if [ os_check == "linux" ] && [ -d "$LOCAL_DRUPAL_SITE/files" ]; then
     if [ ! "$(id -Gn | grep $DOCKER_GROUP_NAME)" ]; then
       sudo chgrp -R 82 $LOCAL_DRUPAL_SITE/files
       sudo chmod -R 775 $LOCAL_DRUPAL_SITE/files
@@ -82,6 +105,14 @@ function fix_permission {
       docker-compose run --rm php chmod -R 775 sites/$DRUPAL_SITE_NAME/files
     fi
   fi
+}
+
+function os_check {
+  case $( uname -s ) in
+    Linux) echo linux;;
+    Darwin) echo mac;;
+    *)     echo other;;
+  esac
 }
 
 while getopts ":spla:" opt; do
